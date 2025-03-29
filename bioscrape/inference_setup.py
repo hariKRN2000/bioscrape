@@ -39,6 +39,8 @@ class InferenceSetup(object):
         self.cost_progress = []
         self.cost_params = []
         self.hmax = kwargs.get('hmax', None)
+        self.parallel = kwargs.get('parallel', False)
+        print("Received parallel as", self.parallel)
         if self.exp_data is not None:
             self.prepare_inference()
             self.setup_cost_function()
@@ -68,7 +70,8 @@ class InferenceSetup(object):
             self.debug,
             self.cost_progress,
             self.cost_params,
-            self.hmax
+            self.hmax,
+            self.parallel
             )
 
     def __setstate__(self, state):
@@ -95,6 +98,7 @@ class InferenceSetup(object):
         self.cost_progress = state[19]
         self.cost_params = state[20]
         self.hmax = state[21]
+        self.parallel = state[22]
         if self.exp_data is not None:
             self.prepare_inference()
             self.setup_cost_function()
@@ -246,7 +250,7 @@ class InferenceSetup(object):
             self.exp_data = exp_data
         else:
             raise ValueError('exp_data must be either a Pandas dataframe or a list of dataframes.')
-        return True 
+        return True
 
     def set_norm_order(self, norm_order: int):
         '''
@@ -255,6 +259,13 @@ class InferenceSetup(object):
         self.norm_order = norm_order 
         return True 
 
+    def set_parallel(self, parallel: bool):
+        '''
+        Set the parallel flag to use parallel processing for MCMC
+        '''
+        self.parallel = parallel 
+        return True
+    
     def get_parameters(self):
         '''
         Returns the list of parameters to estimate that are set for the inference object
@@ -265,7 +276,7 @@ class InferenceSetup(object):
         self.prepare_inference(**kwargs)
         sampler = self.run_emcee(**kwargs)
         return sampler
-
+    
     def prepare_inference(self, **kwargs):
         timepoints = kwargs.get('timepoints')
         norm_order = kwargs.get('norm_order')
@@ -286,8 +297,9 @@ class InferenceSetup(object):
         self.prepare_initial_conditions()
         self.prepare_parameter_conditions()
         self.LL_data = self.extract_data()
-
-    def prepare_initial_conditions(self, ):
+        return
+        
+    def prepare_initial_conditions(self):
         # Create initial conditions as required
         N = 1 if type(self.exp_data) is dict else len(self.exp_data)
         if type(self.initial_conditions) is dict:
@@ -328,7 +340,7 @@ class InferenceSetup(object):
     def extract_data(self):
         exp_data = self.exp_data
         # Get timepoints from given experimental data
-        if isinstance(self.timepoints, (list, np.ndarray)):
+        if isinstance(self.timepoints, (list, np.ndarray)) and self.debug:
             warnings.warn('Timepoints given by user, not using the data to extract the timepoints automatically.')
         M = len(self.measurements)# Number of measurements
         if type(exp_data) is list:
@@ -416,8 +428,8 @@ class InferenceSetup(object):
 
     def cost_function(self, params):
         if self.pid_interface is None:
-            raise RuntimeError("Must call InferenceSetup.setup_cost_function() before InferenceSetup.cost_function(params) can be used.")
-
+            raise RuntimeError("Must call InferenceSetup.setup_cost_function() \
+                               before InferenceSetup.cost_function(params) can be used.")
         cost_value = self.pid_interface.get_likelihood_function(params)
         self.cost_progress.append(cost_value)
         self.cost_params.append(params)
@@ -453,7 +465,6 @@ class InferenceSetup(object):
                 elif prior[0] == "log-uniform":
                     a = np.log(prior[1])
                     b = np.log(prior[2])
-
                     u = np.random.randn(self.nwalkers)*(b - a)+a
                     p0[:, i] = np.exp(u)
                 else:
@@ -492,13 +503,11 @@ class InferenceSetup(object):
     def run_emcee(self, **kwargs):
         if kwargs.get("reuse_likelihood", False) is False: 
             self.setup_cost_function(**kwargs)
-
         progress = kwargs.get('progress')
         convergence_check = kwargs.get('convergence_check', False)
         convergence_diagnostics = kwargs.get('convergence_diagnostics', convergence_check)
         skip_initial_state_check = kwargs.get('skip_initial_state_check', False)
         progress = kwargs.get('progess', True)
-        # threads = kwargs.get('threads', 1)
         fname_csv = kwargs.get('filename_csv', 'mcmc_results.csv')
         if 'results_filename' in kwargs:
             warnings.warn('The keyword results_filename is deprecated and'
@@ -513,17 +522,27 @@ class InferenceSetup(object):
         except:
             raise ImportError('emcee package not installed.')
         ndim = len(self.params_to_estimate)
-
         p0 = self.seed_parameter_values(**kwargs)
-
         assert p0.shape == (self.nwalkers, ndim)
-        
-        pool = kwargs.get('pool', None)
-        if printout: print("creating an ensemble sampler with multiprocessing pool=", pool)
-
-        sampler = emcee.EnsembleSampler(self.nwalkers, ndim, self.cost_function, pool = pool)
+        if self.parallel:
+            try:
+                import multiprocessing
+                pool = multiprocessing.Pool()
+                if printout: print("Using {} cores for parallelization".format(multiprocessing.cpu_count()))
+            except:
+                pool = None
+                raise ImportError('multiprocessing package not found. \
+                                  Make sure to set parallel=False')
+        else:
+            pool = None
+            if printout: print("creating an ensemble sampler without multiprocessing "\
+                               "pool. Set parallel=True to use parallel processing.")
+        sampler = emcee.EnsembleSampler(self.nwalkers, ndim, self.cost_function, pool=pool)
         sampler.run_mcmc(p0, self.nsteps, progress=progress,
                          skip_initial_state_check=skip_initial_state_check)
+        if self.parallel:
+            pool.close()
+            pool.join()
         if convergence_check:
             self.autocorrelation_time = sampler.get_autocorr_time()
         if convergence_diagnostics:
@@ -547,7 +566,7 @@ class InferenceSetup(object):
                 f.write(str(self.convergence_diagnostics))
             f.close()
         if printout: print("Results written to" + fname_csv + " and " + fname_txt)
-        if printout: print('Successfully completed MCMC parameter identification procedure.'
+        if printout: print('Successfully completed MCMC parameter identification procedure. '
                            'Check the MCMC diagnostics to evaluate convergence.')
         return sampler
     

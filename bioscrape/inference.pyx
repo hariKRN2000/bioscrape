@@ -578,7 +578,7 @@ cdef class StochasticStatesLikelihood(ModelLikelihood):
 def py_inference(Model = None, params_to_estimate = None, exp_data = None, initial_conditions = None,
                  parameter_conditions = None, measurements = None, time_column = None, nwalkers = None, 
                  nsteps = None, init_seed = None, prior = None, sim_type = None, inference_type = 'emcee',
-                 method = 'mcmc', plot_show = True, **kwargs):
+                 method = 'mcmc', plot_show = True, parallel = None, **kwargs):
     """
     User level interface for running bioscrape inference module.
     Args:
@@ -619,6 +619,10 @@ def py_inference(Model = None, params_to_estimate = None, exp_data = None, initi
                       https://lmfit.github.io/lmfit-py/fitting.html#choosing-different-fitting-methods
         plot_show (bool): If set to `True`, bioscrape will try to display the generated plots from the inference run. 
                           If set to `False`, not plots will be shown.
+        parallel (bool): If set to `True`, bioscrape will create a multiprocessing.Pool object 
+                         and will be passed to emcee.EnsembleSampler for parallel
+                         processing. If set to `False`, multiprocessing will not be used.
+        kwargs: Additional keyword arguments that are passed into the inference setup.
     Returns:
         for inference_type = "emcee":
             sampler, pid: A tuple consisting of the emcee.EnsembleSampler and the bioscrape pid object
@@ -649,12 +653,14 @@ def py_inference(Model = None, params_to_estimate = None, exp_data = None, initi
         pid.set_nsteps(nsteps)
     if sim_type is not None:
         pid.set_sim_type(sim_type)
+    if parallel is not None:
+        pid.set_parallel(parallel)
     if params_to_estimate is not None:
         pid.set_params_to_estimate(params_to_estimate)
     if prior is not None:
         pid.set_prior(prior)
     if inference_type == 'emcee' and method == 'mcmc':
-        sampler = pid.run_mcmc(plot_show = plot_show, **kwargs)
+        sampler = pid.run_mcmc(**kwargs)
         if plot_show:
             pid.plot_mcmc_results(sampler, **kwargs)
         return sampler, pid

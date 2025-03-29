@@ -62,6 +62,7 @@ def test_getstate(model_setup):
     assert state[19] == IS.cost_progress
     assert state[20] == IS.cost_params
     assert state[21] == IS.hmax
+    assert state[22] == IS.parallel
 
 def test_setstate(model_setup):
     M, params_to_estimate = model_setup
@@ -78,7 +79,7 @@ def test_setstate(model_setup):
 
     state = (
         M, params_to_estimate, .11, None, 11, 111, 2, exp_data, 'stochastic', 'lmfit', 
-        timepoints, 'T', ['y'], init_conds, None, 1, 11, None, True, None, None, 1.0
+        timepoints, 'T', ['y'], init_conds, None, 1, 11, None, True, None, None, 1.0, False
         )
 
     IS.__setstate__(state)
@@ -107,6 +108,7 @@ def test_setstate(model_setup):
     assert state[19] == IS.cost_progress
     assert state[20] == IS.cost_params
     assert state[21] == IS.hmax
+    assert state[22] == IS.parallel
 
 def test_basic_inference(model_setup):
     M, _ = model_setup
