@@ -153,6 +153,9 @@ class SensitivityAnalysis(Model):
         """
         Compute Z_j, i.e. df/dparam_name at a particular point x
         Returns a vector of size n x 1. 
+        The parameter h is modified based on the following formula: 
+        h = h * (1e-3) * RMF(t)
+        The value 1e-3 can be changed by the user, I set it to 1e-3 based on trial and error. 
         """
         method = kwargs.get('method')
         if method is None:
@@ -163,11 +166,35 @@ class SensitivityAnalysis(Model):
         params_dict = dict(self.original_parameters)
         array_f_0 = self._evaluate_model(x, params_dict, time = time)
         h = self.dx # Small parameter for this parameter
+
+        ## define the RMFs to be applied to the time-dependent rate constants
+        ## The RMFs need to be updated manually according to the model
+        f_RMF = x[16]/params_dict['c_max__logistic_cell_growth']
+        n_delta = params_dict['n_delta__bacterial_transcription']
+        n_gamma_aa_syn = params_dict['n_gamma_syn__bacterial_translation']
+        n_gamma_folding = params_dict['n_gamma_folding__bacterial_translation']
+        delta = f_RMF**n_delta/(1 + f_RMF**n_delta)
+        gamma_base = f_RMF * (1 - f_RMF)
+        gamma_aa_syn = np.power(gamma_base, n_gamma_aa_syn)
+        gamma_folding = np.power(gamma_base, n_gamma_folding)
+
+        
         # For each state
         for i in range(n):
             if h == 0:
                 raise ValueError(f'Small parameter exactly equal to 0, cannot compute Zj for parameter {param_name}')
             f_0 = array_f_0[i]
+            if param_name == 'c_max__logistic_cell_growth':
+                h = params_dict[param_name] * 1e-6 # Larger values of h (1e-3) was causing numerical instabilties while estimating SSM
+            elif param_name == 'k_tx_2u__bacterial_transcription' or 'k_tx_4u__mrna_degradation' or 'k_tl_7__non_tag_degradation':
+                h = params_dict[param_name] * 1e-3 * delta
+            elif param_name == 'k_tl_5__bacterial_translation':
+                h = params_dict[param_name] * 1e-3 * gamma_folding + 1e-6 # adding 1e-6 to avoid runtime error
+            elif param_name == 'k_tl_8__bacterial_translation':
+                h = params_dict[param_name] * 1e-3 * gamma_aa_syn + 1e-6 # adding 1e-6 to avoid runtime error
+            else:
+                h = params_dict[param_name] * 1e-3
+            #print('New Algorithm Applied!') # print statement to check if code is updated 
             params_dict[param_name] = params_dict[param_name] + h
             self.M.set_params(params_dict)
             f_h = self._evaluate_model(x, params_dict, time = time)[i]
@@ -222,6 +249,9 @@ class SensitivityAnalysis(Model):
         * normalize: (bool, default is False): When set to True, the returned sensitivity coefficients are normalized with state and parameter values.
         * params: (list of parameters, default is None): The parameters to compute sensitivty to. When None defaults to all model parameters
         * kwargs: Other kwargs passed to `compute_J` and `compute_Z` functions.
+        
+        NOTE: The function compute_Zj is modified. The numerical derivative step is calculated as a fraction of the parameter (1%) and
+        multiplied by the appropriate RMF (if any). This implementation is different from the original bioscrape implementation. 
         """
         def sensitivity_ode(t, x, J, Z):
             # ODE to solve for sensitivity coefficient S
