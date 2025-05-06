@@ -185,7 +185,7 @@ class SensitivityAnalysis(Model):
                 raise ValueError(f'Small parameter exactly equal to 0, cannot compute Zj for parameter {param_name}')
             f_0 = array_f_0[i]
             if param_name == 'c_max__logistic_cell_growth':
-                h = params_dict[param_name] * 1e-6 # Larger values of h (1e-3) was causing numerical instabilties while estimating SSM
+                h = params_dict[param_name] * 1e-6 # Larger values of h (like 1e-3) to scale C_max was causing numerical errors while estimating SSM
             elif param_name == 'k_tx_2u__bacterial_transcription' or 'k_tx_4u__mrna_degradation' or 'k_tl_7__non_tag_degradation':
                 h = params_dict[param_name] * 1e-3 * delta
             elif param_name == 'k_tl_5__bacterial_translation':
