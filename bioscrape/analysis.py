@@ -3,10 +3,8 @@ from bioscrape.types import Model
 from bioscrape.simulator import ModelCSimInterface, DeterministicSimulator
 from scipy.integrate import odeint
 import numpy as np
-from typing import List, Union
 
-def py_sensitivity_analysis(model: Model, timepoints: np.ndarray, 
-                            normalize: bool, **kwargs) -> np.ndarray:
+def py_sensitivity_analysis(model, timepoints, normalize, **kwargs):
     """User interface function to perform sensitivity analysis 
     on a bioscrape model. The sensitivity coefficients are computed 
     where each coefficient s_ij = rate of change of x_i with parameter p_j
@@ -24,50 +22,25 @@ def py_sensitivity_analysis(model: Model, timepoints: np.ndarray,
         numpy.ndarray: A numpy array of size:
                        len(timepoints) x len(parameters) x len(states)
     """
-    dx = kwargs.get("dx", 0.01)
-    precision = kwargs.get("precision", 10) 
-    sens_obj = SensitivityAnalysis(model, dx=dx, precision=precision)
-    ans_df = sens_obj.propagator.py_simulate(sens_obj.sim_interface, 
-                                             timepoints).py_get_dataframe(sens_obj.M)
+    sens_obj = SensitivityAnalysis(model)
+    ans_df = sens_obj.propagator.py_simulate(sens_obj.sim_interface, timepoints).py_get_dataframe(sens_obj.M)
     solutions_array = np.array(ans_df.iloc[:,range(0,len(ans_df.T) - 1)])
     return sens_obj.compute_SSM(solutions_array, timepoints, normalize, **kwargs)
 
-def py_get_jacobian(model: Model, state: Union[list, np.ndarray], **kwargs) -> np.ndarray:
-    """User interfacce function to compute Jacobian (df/dx) of the model.
-
-    Args:
-        model (Model): Bioscrape Model
-        state (Union[list, np.ndarray]): The state values (vector of length n) 
-                                         at which to compute the Jacobian
-
-    Returns:
-        np.ndarray: A (n x n) Jacobian matrix, where n = len(state)
-    """
+def py_get_jacobian(model, state, **kwargs):
     return SensitivityAnalysis(model).compute_J(state, **kwargs)
 
-def py_get_sensitivity_to_parameter(model: Model, state: Union[list, np.ndarray], 
-                                    param_name: str, **kwargs) -> np.ndarray:
-    """User interface function to compute the sensitivity to parameter (df/dp)
-    where p is the parameter and f is the model
-
-    Args:
-        model (Model): Bioscrape Model
-        state (Union[list, np.ndarray]): The state values (vector of length n) 
-                                         at which to compute df/dp
-        param_name (str): The parameter name for which df/dp is computed
-
-    Returns:
-        np.ndarray: A np.ndarray of size (n x 1), where n is the length of state 
-    """
+def py_get_sensitivity_to_parameter(model, state, param_name, **kwargs):
     return SensitivityAnalysis(model).compute_Zj(state, param_name, **kwargs)
 
 class SensitivityAnalysis(Model):
-    def __init__(self, M, dx = 0.01, precision = 10):
+    def __init__(self, M, dx = 0.01, precision = 10, h0 = 1e-3):
         """
         Local Sensitivity Analysis for Bioscrape models.
         Arguments:
         * M: The Bioscrape Model object.
         * dx: Small parameter used in approximate computation methods. 
+        * h0: Small parameter used to estimate numerical derivative step size by scaling parameter values
         * precision: the number of decimal places to round to
         """
         self.M = M
@@ -77,6 +50,7 @@ class SensitivityAnalysis(Model):
         self.propagator = DeterministicSimulator()
         self.num_equations = sim.py_get_num_species()
         self.dx = 0.01
+        self.h0 = 1e-3
         self.original_parameters = dict(M.get_parameter_dictionary())
         self.precision = precision
     
@@ -141,11 +115,11 @@ class SensitivityAnalysis(Model):
                 if method == 'forward_difference':
                     J[i,j]= (f_h - f_0)/h
                 # Error check
-                if J[i, j] == np.inf:
-                    warnings.warn('inf found while computing the Jacobian. Replacing by 1. Check model.')
+                if J[i, j] == np.Inf:
+                    warnings.warn('Inf found while computing the Jacobian. Replacing by 1. Check model.')
                     J[i, j] = 1
-                elif J[i, j] == np.nan:
-                    warnings.warn('nan found while conputing the Jacobian. Replacing 0. Check model.')
+                elif J[i, j] == np.NaN:
+                    warnings.warn('NaN found while conputing the Jacobian. Replacing 0. Check model.')
                     J[i, j] = 0
         return np.round(J, decimals = self.precision)
         
@@ -153,9 +127,6 @@ class SensitivityAnalysis(Model):
         """
         Compute Z_j, i.e. df/dparam_name at a particular point x
         Returns a vector of size n x 1. 
-        The parameter h is modified based on the following formula: 
-        h = h * (1e-3) * RMF(t)
-        The value 1e-3 can be changed by the user, I set it to 1e-3 based on trial and error. 
         """
         method = kwargs.get('method')
         if method is None:
@@ -168,46 +139,37 @@ class SensitivityAnalysis(Model):
         h = self.dx # Small parameter for this parameter
 
         ## define the RMFs to be applied to the time-dependent rate constants
-        ## The RMFs need to be updated manually according to the model
         f_RMF = x[16]/params_dict['c_max__logistic_cell_growth']
-        n_delta = params_dict['n_delta__bacterial_transcription']
-        n_gamma_aa_syn = params_dict['n_gamma_syn__bacterial_translation']
-        n_gamma_folding = params_dict['n_gamma_folding__bacterial_translation']
-        delta = f_RMF**n_delta/(1 + f_RMF**n_delta)
-        gamma_base = f_RMF * (1 - f_RMF)
-        gamma_aa_syn = np.power(gamma_base, n_gamma_aa_syn)
-        gamma_folding = np.power(gamma_base, n_gamma_folding)
-
-        
+        delta = f_RMF**5.5/(1+f_RMF**5.5)
+        gamma = f_RMF * (1 - f_RMF)
+        gamma_aa_syn = np.power(gamma, 0.296)
+        gamma_folding = np.power(gamma, 0.26)
+        h0 = self.h0
         # For each state
         for i in range(n):
             if h == 0:
                 raise ValueError(f'Small parameter exactly equal to 0, cannot compute Zj for parameter {param_name}')
             f_0 = array_f_0[i]
             if param_name == 'c_max__logistic_cell_growth':
-                h = params_dict[param_name] * 1e-6 # Larger values of h (like 1e-3) to scale C_max was causing numerical errors while estimating SSM
+                h = params_dict[param_name] * h0*0.1 # Larger values of h0 (1e-3) was causing numerical instabilties while estimating SSM. Likely because C_max is a large value and using larger step sizes might introduce larger errors in numerical differentiation
             elif param_name == 'k_tx_2u__bacterial_transcription' or 'k_tx_4u__mrna_degradation' or 'k_tl_7__non_tag_degradation':
-                h = params_dict[param_name] * 1e-3 * delta
+                h = params_dict[param_name] * h0 * delta
             elif param_name == 'k_tl_5__bacterial_translation':
-                h = params_dict[param_name] * 1e-3 * gamma_folding + 1e-6 # adding 1e-6 to avoid runtime error
+                h = params_dict[param_name] * h0 * gamma_folding + 1e-8 # adding 1e-8 to avoid runtime error
             elif param_name == 'k_tl_8__bacterial_translation':
-                h = params_dict[param_name] * 1e-3 * gamma_aa_syn + 1e-6 # adding 1e-6 to avoid runtime error
+                h = params_dict[param_name] * h0 * gamma_aa_syn + 1e-8 # adding 1e-8 to avoid runtime error
             else:
-                h = params_dict[param_name] * 1e-3
+                h = params_dict[param_name] * h0
             #print('New Algorithm Applied!') # print statement to check if code is updated 
             params_dict[param_name] = params_dict[param_name] + h
             self.M.set_params(params_dict)
             f_h = self._evaluate_model(x, params_dict, time = time)[i]
             # Reset
             params_dict = dict(self.original_parameters)
-            self.M.set_params(params_dict)
-            # Update
             params_dict[param_name] = params_dict[param_name] - h
             self.M.set_params(params_dict)
             f_mh = self._evaluate_model(x, params_dict, time = time)[i]
-            # Reset
             params_dict = dict(self.original_parameters)
-            self.M.set_params(params_dict)
             if method == 'fourth_order_central_difference':
                 # Gets O(4) central difference on dfi/dpj
                 params_dict[param_name] = params_dict[param_name] + 2*h
@@ -228,11 +190,11 @@ class SensitivityAnalysis(Model):
             if method == 'forward_difference':
                 Z[i]= (f_h - f_0)/h
             # Error check
-            if Z[i] == np.inf:
-                warnings.warn('inf found while compute Zj, replacing by 1. Check model.')
+            if Z[i] == np.Inf:
+                warnings.warn('Inf found while compute Zj, replacing by 1. Check model.')
                 Z[i] = 1
-            elif Z[i] == np.nan:
-                warnings.warn('nan found while compute Zj, replacing by 0. Check model.')
+            elif Z[i] == np.NaN:
+                warnings.warn('NaN found while compute Zj, replacing by 0. Check model.')
                 Z[i] = 0
         return np.round(Z, decimals = self.precision)
 
@@ -249,9 +211,6 @@ class SensitivityAnalysis(Model):
         * normalize: (bool, default is False): When set to True, the returned sensitivity coefficients are normalized with state and parameter values.
         * params: (list of parameters, default is None): The parameters to compute sensitivty to. When None defaults to all model parameters
         * kwargs: Other kwargs passed to `compute_J` and `compute_Z` functions.
-        
-        NOTE: The function compute_Zj is modified. The numerical derivative step is calculated as a fraction of the parameter (1%) and
-        multiplied by the appropriate RMF (if any). This implementation is different from the original bioscrape implementation. 
         """
         def sensitivity_ode(t, x, J, Z):
             # ODE to solve for sensitivity coefficient S
